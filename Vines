@@ -1,11 +1,14 @@
-import React, { useState } from 'react';
-import { Upload, MapPin, Calendar, Users, Package, LogOut, Plus, Edit2, Trash2, X, FileText, BarChart3, Download } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Upload, MapPin, Calendar, Users, Package, LogOut, Plus, Edit2, Trash2, X, FileText, BarChart3, Download, CheckCircle } from 'lucide-react';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+const supabase = createClient('https://croftufjbqbbftzytmzi.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNyb2Z0dWZqYnFiYmZ0enl0bXppIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI1NDQ1MTYsImV4cCI6MjA3ODEyMDUxNn0.KZ0lHYZm32YP6VRissiiQ6vEMlc4dy35VUwl5ue38-A');
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [vines, setVines] = useState([]);
-  const [locs, setLocs] = useState([{id:1,name:'Almacén Principal'},{id:2,name:'Bodega Norte'},{id:3,name:'Zona de Carga'}]);
-  const [vigs, setVigs] = useState([{id:1,name:'Juan Pérez',email:'juan@ejemplo.com',password:'vigilante123',active:true}]);
+  const [locs, setLocs] = useState([]);
+  const [vigs, setVigs] = useState([]);
   const [admin, setAdmin] = useState({username:'admin',password:'admin123'});
   const [view, setView] = useState('login');
   const [sel, setSel] = useState(null);
@@ -23,59 +26,49 @@ export default function App() {
   const [editType, setEditType] = useState('');
   const [editData, setEditData] = useState(null);
   const [editValue, setEditValue] = useState('');
+  const [alertModal, setAlertModal] = useState(false);
+  const [alertMessage, setAlertMessage] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  const editLocation = (loc) => {
-    setEditType('location');
-    setEditData(loc);
-    setEditValue(loc.name);
-    setEditModal(true);
-  };
+  useEffect(() => {
+    loadData();
+  }, []);
 
-  const deleteLocation = (loc) => {
-    setEditType('delete-location');
-    setEditData(loc);
-    setEditModal(true);
-  };
-
-  const addLocation = () => {
-    setEditType('add-location');
-    setEditData(null);
-    setEditValue('');
-    setEditModal(true);
-  };
-
-  const confirmEdit = () => {
-    if (editType === 'location' && editValue.trim()) {
-      setLocs(locs.map(l => l.id === editData.id ? {...l, name: editValue.trim()} : l));
-    } else if (editType === 'add-location' && editValue.trim()) {
-      setLocs([...locs, {id: Date.now(), name: editValue.trim()}]);
-    } else if (editType === 'delete-location') {
-      setLocs(locs.filter(l => l.id !== editData.id));
-    } else if (editType === 'add-vigilante' && editValue.trim()) {
-      const [name, email, pass] = editValue.split('|');
-      if (name && email && pass) {
-        setVigs([...vigs, {id: Date.now(), name, email, password: pass, active: true}]);
-      }
-    } else if (editType === 'change-password' && editValue.trim()) {
-      setVigs(vigs.map(v => v.id === editData.id ? {...v, password: editValue.trim()} : v));
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      const [vinesRes, locsRes, vigsRes, adminRes] = await Promise.all([
+        supabase.from('vines').select('*'),
+        supabase.from('locations').select('*'),
+        supabase.from('vigilantes').select('*'),
+        supabase.from('admin').select('*').single()
+      ]);
+      
+      if (vinesRes.data) setVines(vinesRes.data);
+      if (locsRes.data) setLocs(locsRes.data);
+      if (vigsRes.data) setVigs(vigsRes.data);
+      if (adminRes.data) setAdmin(adminRes.data);
+    } catch (error) {
+      console.error('Error loading data:', error);
+    } finally {
+      setLoading(false);
     }
-    setEditModal(false);
-    setEditValue('');
   };
+
+  const close = () => { setModal(false); setSel(null); setMLoc(''); setMDate(new Date().toISOString().split('T')[0]); };
   
   const handleLogin = (e) => {
     e.preventDefault();
     setLoginError('');
-    
     if (loginUser === admin.username && loginPass === admin.password) {
-      setUser({role:'admin',name:'Administrador',username:admin.username});
+      setUser({role:'admin',name:'Administrador'});
       setView('admin-vines');
       setLoginUser('');
       setLoginPass('');
     } else {
       const vig = vigs.find(v => v.email === loginUser && v.password === loginPass && v.active);
       if (vig) {
-        setUser({role:'vigilante',name:vig.name,email:vig.email});
+        setUser({role:'vigilante',name:vig.name});
         setView('vigilante');
         setLoginUser('');
         setLoginPass('');
@@ -84,7 +77,7 @@ export default function App() {
       }
     }
   };
-  
+
   const handleCSV = async (e) => {
     const f = e.target.files[0];
     if (!f) return;
@@ -92,72 +85,146 @@ export default function App() {
       const txt = await f.text();
       const lines = txt.split('\n');
       const existingVINs = new Set(vines.map(v => v.vin.toLowerCase()));
-      const nv = lines.slice(1).filter(l => l.trim()).map((l, i) => {
-        const v = l.split(',').map(x => x.trim());
-        return {id:Date.now()+i,vin:v[0]||'',marca:v[1]||'',modelo:v[2]||'',año:v[3]||'',color:v[4]||'',location:null,entryDate:null,exitDate:null};
+      const nv = lines.slice(1).filter(ln => ln.trim()).map((ln) => {
+        const vals = ln.split(',').map(x => x.trim());
+        return {id:Date.now()+Math.random(),vin:vals[0]||'',marca:vals[1]||'',modelo:vals[2]||'',año:vals[3]||'',color:vals[4]||'',location:null,entry_date:null,exit_date:null,delivered:false};
       }).filter(v => v.vin && !existingVINs.has(v.vin.toLowerCase()));
-      const duplicates = lines.slice(1).filter(l => l.trim()).length - nv.length;
-      setVines([...vines,...nv]);
-      alert(`${nv.length} VINES importados${duplicates > 0 ? `. ${duplicates} duplicados ignorados` : ''}`);
-    } catch(e) { alert('Error al importar CSV'); }
+      
+      const duplicates = lines.slice(1).filter(ln => ln.trim()).length - nv.length;
+      
+      const { error } = await supabase.from('vines').insert(nv);
+      if (error) throw error;
+      
+      await loadData();
+      setAlertMessage(`${nv.length} VINES importados${duplicates > 0 ? `. ${duplicates} duplicados ignorados` : ''}`);
+      setAlertModal(true);
+    } catch(err) { 
+      setAlertMessage('Error al importar CSV: ' + err.message);
+      setAlertModal(true);
+    }
   };
 
-  const assignLoc = () => {
-    if (!mLoc || !mDate) { alert('Completa todos los campos'); return; }
-    setVines(vines.map(v => v.id===sel.id ? {...v,location:parseInt(mLoc),entryDate:mDate} : v));
+  const assignLoc = async () => {
+    if (!mLoc || !mDate) {
+      setAlertMessage('Por favor completa todos los campos');
+      setAlertModal(true);
+      return;
+    }
+    const { error } = await supabase.from('vines').update({location:parseInt(mLoc),entry_date:mDate}).eq('id',sel.id);
+    if (error) {
+      setAlertMessage('Error al asignar ubicación');
+      setAlertModal(true);
+      return;
+    }
+    await loadData();
     close();
   };
 
-  const exit = () => {
-    if (!mDate) { alert('Selecciona fecha'); return; }
-    setVines(vines.map(v => v.id===sel.id ? {...v,exitDate:mDate} : v));
+  const exitVin = async () => {
+    if (!mDate) {
+      setAlertMessage('Por favor selecciona la fecha de salida');
+      setAlertModal(true);
+      return;
+    }
+    const { error } = await supabase.from('vines').update({exit_date:mDate}).eq('id',sel.id);
+    if (error) {
+      setAlertMessage('Error al registrar salida');
+      setAlertModal(true);
+      return;
+    }
+    await loadData();
     close();
   };
 
   const editLoc = (vin) => {
     setSel(vin);
     setMLoc(vin.location?.toString()||'');
-    setMDate(vin.entryDate||new Date().toISOString().split('T')[0]);
+    setMDate(vin.entry_date||new Date().toISOString().split('T')[0]);
     setMType('edit');
     setModal(true);
   };
 
-  const updateLoc = () => {
-    if (!mLoc) { alert('Selecciona ubicación'); return; }
-    setVines(vines.map(v => v.id===sel.id ? {...v,location:parseInt(mLoc),entryDate:mDate,exitDate:null} : v));
+  const updateLoc = async () => {
+    if (!mLoc) {
+      setAlertMessage('Por favor selecciona una ubicación');
+      setAlertModal(true);
+      return;
+    }
+    const { error } = await supabase.from('vines').update({location:parseInt(mLoc),entry_date:mDate,exit_date:null,delivered:false}).eq('id',sel.id);
+    if (error) {
+      setAlertMessage('Error al actualizar ubicación');
+      setAlertModal(true);
+      return;
+    }
+    await loadData();
     close();
   };
 
-  const exportCSV = (lid=null) => {
+  const confirmEdit = async () => {
+    try {
+      if (editType === 'location' && editValue.trim()) {
+        await supabase.from('locations').update({name:editValue.trim()}).eq('id',editData.id);
+      } else if (editType === 'add-location' && editValue.trim()) {
+        await supabase.from('locations').insert({id:Date.now(),name:editValue.trim()});
+      } else if (editType === 'delete-location') {
+        await supabase.from('locations').delete().eq('id',editData.id);
+      } else if (editType === 'delete-vigilante') {
+        await supabase.from('vigilantes').delete().eq('id',editData.id);
+      } else if (editType === 'add-vigilante' && editValue.trim()) {
+        const parts = editValue.split('|');
+        if (parts[0] && parts[1] && parts[2]) {
+          await supabase.from('vigilantes').insert({id:Date.now(),name:parts[0],email:parts[1],password:parts[2],active:true});
+        }
+      } else if (editType === 'change-password' && editValue.trim()) {
+        await supabase.from('vigilantes').update({password:editValue.trim()}).eq('id',editData.id);
+      } else if (editType === 'change-admin-password' && editValue.trim()) {
+        await supabase.from('admin').update({password:editValue.trim()}).eq('id',1);
+        setAlertMessage('Contraseña de administrador actualizada');
+        setAlertModal(true);
+      } else if (editType === 'mark-delivered') {
+        await supabase.from('vines').update({location:null,exit_date:new Date().toISOString().split('T')[0],delivered:true}).eq('id',editData.id);
+        setAlertMessage('VIN marcado como entregado al cliente');
+        setAlertModal(true);
+      }
+      await loadData();
+      setEditModal(false);
+      setEditValue('');
+    } catch (error) {
+      setAlertMessage('Error al guardar cambios');
+      setAlertModal(true);
+    }
+  };
+
+  const exportCSV = (locationId = null) => {
     let data = vines;
     let fname = 'reporte_completo.csv';
-    if (lid && lid!=='all') {
-      const l = locs.find(x=>x.id===parseInt(lid));
-      data = vines.filter(v=>v.location===parseInt(lid));
-      fname = `reporte_${l?.name.replace(/\s/g,'_')}.csv`;
+    if (locationId && locationId !== 'all') {
+      const foundLoc = locs.find(loc => loc.id === parseInt(locationId));
+      data = vines.filter(v => v.location === parseInt(locationId));
+      fname = `reporte_${foundLoc?.name.replace(/\s/g, '_')}.csv`;
     }
     const h = ['VIN','Marca','Modelo','Año','Color','Ubicación','Entrada','Salida','Estado'];
-    const r = data.map(v=>[v.vin,v.marca,v.modelo,v.año,v.color,v.location?locs.find(l=>l.id===v.location)?.name:'Sin asignar',v.entryDate||'-',v.exitDate||'-',v.exitDate?'Completado':v.location?'En ubicación':'Pendiente']);
-    const csv = [h,...r].map(x=>x.join(',')).join('\n');
-    const blob = new Blob([csv],{type:'text/csv'});
+    const rows = data.map(v => [v.vin,v.marca,v.modelo,v.año,v.color,v.delivered?'Entregado a Cliente':v.location?locs.find(loc=>loc.id===v.location)?.name:'Sin asignar',v.entry_date||'-',v.exit_date||'-',v.delivered?'Entregado':v.exit_date?'Completado':v.location?'En ubicación':'Pendiente']);
+    const csv = [h,...rows].map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], {type:'text/csv'});
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href=url;
-    a.download=fname;
+    a.href = url;
+    a.download = fname;
     a.click();
     window.URL.revokeObjectURL(url);
   };
 
   const getReport = () => {
-    const rd = locs.map(l => {
-      const curr = vines.filter(v=>v.location===l.id&&!v.exitDate);
-      const out = vines.filter(v=>v.location===l.id&&v.exitDate);
-      const tot = vines.filter(v=>v.location===l.id);
-      return {location:l.name,locationId:l.id,current:curr.length,exited:out.length,total:tot.length,vines:tot};
+    const byLoc = locs.map(loc => {
+      const curr = vines.filter(v => v.location === loc.id && !v.exit_date);
+      const out = vines.filter(v => v.location === loc.id && v.exit_date);
+      const tot = vines.filter(v => v.location === loc.id);
+      return {location:loc.name,locationId:loc.id,current:curr.length,exited:out.length,total:tot.length,vines:tot};
     });
     return {
-      byLocation:rd,
-      totals:{total:vines.length,assigned:vines.filter(v=>v.location&&!v.exitDate).length,completed:vines.filter(v=>v.exitDate).length,unassigned:vines.filter(v=>!v.location).length}
+      byLocation:byLoc,
+      totals:{total:vines.length,assigned:vines.filter(v=>v.location&&!v.exit_date).length,completed:vines.filter(v=>v.exit_date).length,unassigned:vines.filter(v=>!v.location).length}
     };
   };
 
@@ -167,7 +234,18 @@ export default function App() {
     return ms&&ml;
   });
 
-  if (view==='login') {
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-600 to-purple-700 flex items-center justify-center">
+        <div className="bg-white rounded-2xl shadow-2xl p-8">
+          <Package className="w-16 h-16 text-blue-600 animate-pulse mx-auto mb-4"/>
+          <p className="text-gray-800 font-semibold">Cargando datos...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'login') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-600 to-purple-700 flex items-center justify-center p-4">
         <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
@@ -178,44 +256,19 @@ export default function App() {
             <h1 className="text-3xl font-bold text-gray-800">Sistema VINES</h1>
             <p className="text-gray-600 mt-2">Gestión de Inventario</p>
           </div>
-          
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">Usuario / Email</label>
-              <input
-                type="text"
-                value={loginUser}
-                onChange={(e) => setLoginUser(e.target.value)}
-                placeholder="admin o email@ejemplo.com"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none"
-              />
+              <input type="text" value={loginUser} onChange={(e)=>setLoginUser(e.target.value)} placeholder="admin o email@ejemplo.com" className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-600 outline-none"/>
             </div>
-            
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">Contraseña</label>
-              <input
-                type="password"
-                value={loginPass}
-                onChange={(e) => setLoginPass(e.target.value)}
-                placeholder="Ingresa tu contraseña"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600 focus:border-transparent outline-none"
-                onKeyPress={(e) => e.key === 'Enter' && handleLogin(e)}
-              />
+              <input type="password" value={loginPass} onChange={(e)=>setLoginPass(e.target.value)} placeholder="Contraseña" className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-600 outline-none" onKeyPress={(e)=>e.key==='Enter'&&handleLogin(e)}/>
             </div>
-            
-            {loginError && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
-                {loginError}
-              </div>
-            )}
-            
-            <button
-              onClick={handleLogin}
-              className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold py-4 px-6 rounded-xl transition-all transform hover:scale-105 shadow-lg"
-            >
+            {loginError && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{loginError}</div>}
+            <button onClick={handleLogin} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold py-4 px-6 rounded-xl transition-all shadow-lg">
               Iniciar Sesión
             </button>
-            
             <div className="mt-6 p-4 bg-gray-50 rounded-lg">
               <p className="text-xs text-gray-600 mb-2 font-semibold">Credenciales de prueba:</p>
               <p className="text-xs text-gray-600">👨‍💼 Admin: <span className="font-mono bg-white px-2 py-1 rounded">admin</span> / <span className="font-mono bg-white px-2 py-1 rounded">admin123</span></p>
@@ -234,396 +287,36 @@ export default function App() {
           <h1 className="text-2xl font-bold">Sistema VINES</h1>
           <p className="text-sm opacity-90">{user?.name}</p>
         </div>
-        <button onClick={()=>{setUser(null);setView('login');}} className="bg-white bg-opacity-20 hover:bg-opacity-30 px-4 py-2 rounded-lg">
-          <LogOut size={20}/>
-        </button>
+        <div className="flex gap-2">
+          {user?.role==='admin'&&<button onClick={()=>{setEditType('change-admin-password');setEditValue('');setEditModal(true);}} className="bg-white bg-opacity-20 hover:bg-opacity-30 px-4 py-2 rounded-lg text-sm">Cambiar Contraseña</button>}
+          <button onClick={()=>{setUser(null);setView('login');}} className="bg-white bg-opacity-20 hover:bg-opacity-30 px-4 py-2 rounded-lg">
+            <LogOut size={20}/>
+          </button>
+        </div>
       </div>
     </div>
   );
 
-  if (user?.role==='admin') {
+  if (user?.role === 'admin') {
     const rep = getReport();
     return (
       <div className="min-h-screen bg-gray-50">
         <Header/>
+        {editModal&&<div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"><div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md"><div className="flex justify-between items-center mb-4"><h3 className="text-xl font-bold">{editType==='location'&&'Editar Ubicación'}{editType==='add-location'&&'Nueva Ubicación'}{editType==='delete-location'&&'Confirmar Eliminación'}{editType==='delete-vigilante'&&'Confirmar Eliminación'}{editType==='add-vigilante'&&'Nuevo Vigilante'}{editType==='change-password'&&'Cambiar Contraseña'}{editType==='change-admin-password'&&'Cambiar Contraseña Admin'}{editType==='mark-delivered'&&'Entregar a Cliente'}</h3><button onClick={()=>setEditModal(false)} className="p-2 hover:bg-gray-100 rounded-lg"><X size={20}/></button></div>{editType==='delete-location'||editType==='delete-vigilante'?<div><p className="text-gray-700 mb-6">¿Seguro que deseas eliminar {editType==='delete-location'?'la ubicación':'al vigilante'} <span className="font-bold">"{editData?.name}"</span>?</p><div className="flex gap-3"><button onClick={()=>setEditModal(false)} className="flex-1 px-4 py-3 bg-gray-200 hover:bg-gray-300 rounded-lg font-semibold">Cancelar</button><button onClick={confirmEdit} className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold">Eliminar</button></div></div>:editType==='mark-delivered'?<div><p className="text-gray-700 mb-6">¿Confirmar entrega del VIN <span className="font-bold font-mono">{editData?.vin}</span> al cliente?</p><div className="flex gap-3"><button onClick={()=>setEditModal(false)} className="flex-1 px-4 py-3 bg-gray-200 hover:bg-gray-300 rounded-lg font-semibold">Cancelar</button><button onClick={confirmEdit} className="flex-1 px-4 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold">Confirmar Entrega</button></div></div>:editType==='add-vigilante'?<div className="space-y-4"><div><label className="block text-sm font-semibold mb-2">Nombre</label><input type="text" placeholder="Nombre completo" value={editValue.split('|')[0]||''} onChange={(e)=>{const p=editValue.split('|');p[0]=e.target.value;setEditValue(p.join('|'));}} className="w-full px-4 py-3 border rounded-lg"/></div><div><label className="block text-sm font-semibold mb-2">Email</label><input type="email" placeholder="email@ejemplo.com" value={editValue.split('|')[1]||''} onChange={(e)=>{const p=editValue.split('|');p[1]=e.target.value;setEditValue(p.join('|'));}} className="w-full px-4 py-3 border rounded-lg"/></div><div><label className="block text-sm font-semibold mb-2">Contraseña</label><input type="text" placeholder="Contraseña" value={editValue.split('|')[2]||''} onChange={(e)=>{const p=editValue.split('|');p[2]=e.target.value;setEditValue(p.join('|'));}} className="w-full px-4 py-3 border rounded-lg"/></div><button onClick={confirmEdit} className="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-lg font-semibold">Crear</button></div>:<div className="space-y-4"><div><label className="block text-sm font-semibold mb-2">{editType==='location'||editType==='add-location'?'Nombre de la ubicación':'Nueva contraseña'}</label><input type={editType==='change-password'||editType==='change-admin-password'?'password':'text'} value={editValue} onChange={(e)=>setEditValue(e.target.value)} placeholder={editType==='change-password'||editType==='change-admin-password'?'Nueva contraseña':'Nombre'} className="w-full px-4 py-3 border rounded-lg" onKeyPress={(e)=>e.key==='Enter'&&confirmEdit()}/></div><button onClick={confirmEdit} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-semibold">Confirmar</button></div>}</div></div>}
+        {alertModal&&<div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"><div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm"><div className="text-center mb-4"><div className="bg-blue-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3"><Package className="w-8 h-8 text-blue-600"/></div><p className="text-gray-800">{alertMessage}</p></div><button onClick={()=>setAlertModal(false)} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-semibold">Aceptar</button></div></div>}
         <div className="bg-white shadow-sm border-b flex overflow-x-auto">
-          <button onClick={()=>setView('admin-vines')} className={`px-6 py-4 font-semibold whitespace-nowrap ${view==='admin-vines'?'border-b-4 border-blue-600 text-blue-600':'text-gray-600 hover:bg-gray-50'}`}>
-            <Package className="inline mr-2" size={18}/>VINES
-          </button>
-          <button onClick={()=>setView('admin-reports')} className={`px-6 py-4 font-semibold whitespace-nowrap ${view==='admin-reports'?'border-b-4 border-blue-600 text-blue-600':'text-gray-600 hover:bg-gray-50'}`}>
-            <BarChart3 className="inline mr-2" size={18}/>Reportes
-          </button>
-          <button onClick={()=>setView('admin-locations')} className={`px-6 py-4 font-semibold whitespace-nowrap ${view==='admin-locations'?'border-b-4 border-blue-600 text-blue-600':'text-gray-600 hover:bg-gray-50'}`}>
-            <MapPin className="inline mr-2" size={18}/>Ubicaciones
-          </button>
-          <button onClick={()=>setView('admin-vigilantes')} className={`px-6 py-4 font-semibold whitespace-nowrap ${view==='admin-vigilantes'?'border-b-4 border-blue-600 text-blue-600':'text-gray-600 hover:bg-gray-50'}`}>
-            <Users className="inline mr-2" size={18}/>Vigilantes
-          </button>
+          <button onClick={()=>setView('admin-vines')} className={`px-6 py-4 font-semibold whitespace-nowrap ${view==='admin-vines'?'border-b-4 border-blue-600 text-blue-600':'text-gray-600'}`}><Package className="inline mr-2" size={18}/>VINES</button>
+          <button onClick={()=>setView('admin-reports')} className={`px-6 py-4 font-semibold whitespace-nowrap ${view==='admin-reports'?'border-b-4 border-blue-600 text-blue-600':'text-gray-600'}`}><BarChart3 className="inline mr-2" size={18}/>Reportes</button>
+          <button onClick={()=>setView('admin-locations')} className={`px-6 py-4 font-semibold whitespace-nowrap ${view==='admin-locations'?'border-b-4 border-blue-600 text-blue-600':'text-gray-600'}`}><MapPin className="inline mr-2" size={18}/>Ubicaciones</button>
+          <button onClick={()=>setView('admin-vigilantes')} className={`px-6 py-4 font-semibold whitespace-nowrap ${view==='admin-vigilantes'?'border-b-4 border-blue-600 text-blue-600':'text-gray-600'}`}><Users className="inline mr-2" size={18}/>Vigilantes</button>
         </div>
         <div className="p-4 max-w-7xl mx-auto">
-          {view==='admin-vines'&&(
-            <div>
-              <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-                <label className="block mb-2 font-semibold text-gray-700"><Upload className="inline mr-2" size={20}/>Importar VINES desde CSV</label>
-                <input type="file" accept=".csv" onChange={handleCSV} className="block w-full text-sm file:mr-4 file:py-3 file:px-6 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:font-semibold hover:file:bg-blue-700 file:cursor-pointer"/>
-                <p className="text-xs text-gray-500 mt-2">Formato: VIN, Marca, Modelo, Año, Color</p>
-              </div>
-              <div className="bg-white rounded-xl shadow-md p-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="text-xl font-bold">Inventario de VINES ({vines.length})</h2>
-                  <button onClick={()=>exportCSV()} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold flex items-center">
-                    <Download className="mr-2" size={18}/>Exportar
-                  </button>
-                </div>
-                {vines.length===0?(
-                  <div className="text-center py-12 text-gray-500">
-                    <Package size={64} className="mx-auto mb-4 opacity-20"/>
-                    <p>No hay VINES. Importa un CSV.</p>
-                  </div>
-                ):(
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-sm font-semibold">VIN</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold">Marca</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold">Modelo</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold">Año</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold">Ubicación</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold">Estado</th>
-                          <th className="px-4 py-3 text-left text-sm font-semibold">Acciones</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
-                        {vines.map(v=>(
-                          <tr key={v.id} className="hover:bg-gray-50">
-                            <td className="px-4 py-3 text-sm font-mono">{v.vin}</td>
-                            <td className="px-4 py-3 text-sm">{v.marca}</td>
-                            <td className="px-4 py-3 text-sm">{v.modelo}</td>
-                            <td className="px-4 py-3 text-sm">{v.año}</td>
-                            <td className="px-4 py-3 text-sm">{v.location?locs.find(l=>l.id===v.location)?.name:'-'}</td>
-                            <td className="px-4 py-3">
-                              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${v.exitDate?'bg-gray-200 text-gray-700':v.location?'bg-green-100 text-green-700':'bg-yellow-100 text-yellow-700'}`}>
-                                {v.exitDate?'Salió':v.location?'En ubicación':'Pendiente'}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3">
-                              {v.location&&!v.exitDate&&(
-                                <button onClick={()=>editLoc(v)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Corregir">
-                                  <Edit2 size={18}/>
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-          {view==='admin-reports'&&(
-            <div className="space-y-6">
-              <div className="grid md:grid-cols-4 gap-4">
-                <div className="bg-white rounded-xl shadow-md p-6">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-semibold text-gray-600">Total</h3>
-                    <Package className="text-blue-600" size={24}/>
-                  </div>
-                  <p className="text-3xl font-bold">{rep.totals.total}</p>
-                </div>
-                <div className="bg-white rounded-xl shadow-md p-6">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-semibold text-gray-600">En Ubicación</h3>
-                    <MapPin className="text-green-600" size={24}/>
-                  </div>
-                  <p className="text-3xl font-bold text-green-600">{rep.totals.assigned}</p>
-                </div>
-                <div className="bg-white rounded-xl shadow-md p-6">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-semibold text-gray-600">Completados</h3>
-                    <FileText className="text-gray-600" size={24}/>
-                  </div>
-                  <p className="text-3xl font-bold text-gray-600">{rep.totals.completed}</p>
-                </div>
-                <div className="bg-white rounded-xl shadow-md p-6">
-                  <div className="flex items-center justify-between mb-2">
-                    <h3 className="text-sm font-semibold text-gray-600">Sin Asignar</h3>
-                    <Calendar className="text-yellow-600" size={24}/>
-                  </div>
-                  <p className="text-3xl font-bold text-yellow-600">{rep.totals.unassigned}</p>
-                </div>
-              </div>
-              <div className="bg-white rounded-xl shadow-md p-6">
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-xl font-bold">Reportes por Ubicación</h2>
-                  <div className="flex gap-2">
-                    <select value={rLoc} onChange={(e)=>setRLoc(e.target.value)} className="px-4 py-2 border rounded-lg">
-                      <option value="all">Todas</option>
-                      {locs.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
-                    </select>
-                    <button onClick={()=>exportCSV(rLoc)} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold flex items-center">
-                      <Download className="mr-2" size={18}/>Exportar
-                    </button>
-                  </div>
-                </div>
-                <div className="space-y-4">
-                  {rep.byLocation.filter(l=>rLoc==='all'||l.locationId===parseInt(rLoc)).map(l=>(
-                    <div key={l.locationId} className="border rounded-lg p-6">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <h3 className="text-lg font-bold">{l.location}</h3>
-                          <p className="text-sm text-gray-600">Total: {l.total}</p>
-                        </div>
-                        <div className="flex gap-4">
-                          <div className="text-center">
-                            <p className="text-2xl font-bold text-green-600">{l.current}</p>
-                            <p className="text-xs text-gray-600">Actuales</p>
-                          </div>
-                          <div className="text-center">
-                            <p className="text-2xl font-bold text-gray-600">{l.exited}</p>
-                            <p className="text-xs text-gray-600">Salieron</p>
-                          </div>
-                        </div>
-                      </div>
-                      {l.vines.length>0&&(
-                        <div className="bg-gray-50 rounded-lg p-4 max-h-60 overflow-y-auto">
-                          <table className="w-full text-sm">
-                            <thead>
-                              <tr className="text-left text-gray-600">
-                                <th className="pb-2">VIN</th>
-                                <th className="pb-2">Marca/Modelo</th>
-                                <th className="pb-2">Entrada</th>
-                                <th className="pb-2">Salida</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y">
-                              {l.vines.map(v=>(
-                                <tr key={v.id}>
-                                  <td className="py-2 font-mono text-xs">{v.vin}</td>
-                                  <td className="py-2">{v.marca} {v.modelo}</td>
-                                  <td className="py-2">{v.entryDate?new Date(v.entryDate).toLocaleDateString():'-'}</td>
-                                  <td className="py-2">{v.exitDate?new Date(v.exitDate).toLocaleDateString():'-'}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-          {view==='admin-locations'&&(
-            <div className="bg-white rounded-xl shadow-md p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-bold">Ubicaciones</h2>
-                <button onClick={addLocation} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold flex items-center">
-                  <Plus size={20} className="mr-2"/>Nueva
-                </button>
-              </div>
-              <div className="grid gap-4">
-                {locs.map(l=>{
-                  const cnt=vines.filter(v=>v.location===l.id&&!v.exitDate).length;
-                  return(
-                    <div key={l.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50">
-                      <div className="flex items-center">
-                        <MapPin className="text-blue-600 mr-3" size={24}/>
-                        <div>
-                          <span className="font-semibold">{l.name}</span>
-                          <p className="text-sm text-gray-600">{cnt} VINES</p>
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button type="button" onClick={() => editLocation(l)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                          <Edit2 size={18}/>
-                        </button>
-                        <button type="button" onClick={() => deleteLocation(l)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                          <Trash2 size={18}/>
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-          {view==='admin-vigilantes'&&(
-            <div className="bg-white rounded-xl shadow-md p-6">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-bold">Vigilantes</h2>
-                <button onClick={()=>{setEditType('add-vigilante');setEditValue('');setEditModal(true);}} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-semibold flex items-center">
-                  <Plus size={20} className="mr-2"/>Nuevo
-                </button>
-              </div>
-              <div className="grid gap-4">
-                {vigs.map(v=>(
-                  <div key={v.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50">
-                    <div>
-                      <div className="font-semibold">{v.name}</div>
-                      <div className="text-sm text-gray-600">{v.email}</div>
-                      <div className="text-xs text-gray-500 font-mono mt-1">Contraseña: {v.password}</div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${v.active?'bg-green-100 text-green-700':'bg-gray-200 text-gray-700'}`}>
-                        {v.active?'Activo':'Inactivo'}
-                      </span>
-                      <button onClick={()=>{setEditType('change-password');setEditData(v);setEditValue('');setEditModal(true);}} className="px-3 py-2 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-xs font-semibold">
-                        Cambiar Pass
-                      </button>
-                      <button onClick={(e)=>{e.stopPropagation();setVigs(vigs.map(x=>x.id===v.id?{...x,active:!x.active}:x));}} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-semibold">
-                        {v.active?'Desactivar':'Activar'}
-                      </button>
-                      <button onClick={(e)=>{e.stopPropagation();if(window.confirm('¿Eliminar este vigilante?'))setVigs(vigs.filter(x=>x.id!==v.id));}} className="p-2 text-red-600 hover:bg-red-50 rounded-lg">
-                        <Trash2 size={18}/>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {view==='admin-vines'&&<div><div className="bg-white rounded-xl shadow-md p-6 mb-6"><label className="block mb-2 font-semibold"><Upload className="inline mr-2" size={20}/>Importar CSV</label><input type="file" accept=".csv" onChange={handleCSV} className="block w-full text-sm file:mr-4 file:py-3 file:px-6 file:rounded-lg file:border-0 file:bg-blue-600 file:text-white file:font-semibold hover:file:bg-blue-700 file:cursor-pointer"/><p className="text-xs text-gray-500 mt-2">Formato: VIN,Marca,Modelo,Año,Color</p></div><div className="bg-white rounded-xl shadow-md p-6"><div className="flex justify-between mb-4"><h2 className="text-xl font-bold">Inventario ({vines.length})</h2><button onClick={()=>exportCSV()} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold flex items-center"><Download className="mr-2" size={18}/>Exportar</button></div>{vines.length===0?<div className="text-center py-12 text-gray-500"><Package size={64} className="mx-auto mb-4 opacity-20"/><p>No hay VINES</p></div>:<div className="overflow-x-auto"><table className="w-full"><thead className="bg-gray-50"><tr><th className="px-4 py-3 text-left text-sm font-semibold">VIN</th><th className="px-4 py-3 text-left text-sm font-semibold">Marca</th><th className="px-4 py-3 text-left text-sm font-semibold">Modelo</th><th className="px-4 py-3 text-left text-sm font-semibold">Año</th><th className="px-4 py-3 text-left text-sm font-semibold">Ubicación</th><th className="px-4 py-3 text-left text-sm font-semibold">Estado</th><th className="px-4 py-3 text-left text-sm font-semibold">Acciones</th></tr></thead><tbody className="divide-y">{vines.map(vin=><tr key={vin.id} className="hover:bg-gray-50"><td className="px-4 py-3 text-sm font-mono">{vin.vin}</td><td className="px-4 py-3 text-sm">{vin.marca}</td><td className="px-4 py-3 text-sm">{vin.modelo}</td><td className="px-4 py-3 text-sm">{vin.año}</td><td className="px-4 py-3 text-sm">{vin.delivered?'Entregado a Cliente':vin.location?locs.find(loc=>loc.id===vin.location)?.name:'-'}</td><td className="px-4 py-3"><span className={`px-3 py-1 rounded-full text-xs font-semibold ${vin.delivered?'bg-blue-100 text-blue-700':vin.exit_date?'bg-gray-200 text-gray-700':vin.location?'bg-green-100 text-green-700':'bg-yellow-100 text-yellow-700'}`}>{vin.delivered?'Entregado':vin.exit_date?'Salió':vin.location?'En ubicación':'Pendiente'}</span></td><td className="px-4 py-3"><div className="flex gap-1">{!vin.delivered&&<button onClick={()=>editLoc(vin)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg" title="Editar"><Edit2 size={16}/></button>}{!vin.delivered&&<button onClick={()=>{setEditType('mark-delivered');setEditData(vin);setEditModal(true);}} className="p-2 text-green-600 hover:bg-green-50 rounded-lg" title="Entregar a Cliente"><CheckCircle size={16}/></button>}</div></td></tr>)}</tbody></table></div>}</div></div>}
+          {view==='admin-reports'&&<div className="space-y-6"><div className="grid md:grid-cols-4 gap-4"><div className="bg-white rounded-xl shadow-md p-6"><div className="flex items-center justify-between mb-2"><h3 className="text-sm font-semibold text-gray-600">Total</h3><Package className="text-blue-600" size={24}/></div><p className="text-3xl font-bold">{rep.totals.total}</p></div><div className="bg-white rounded-xl shadow-md p-6"><div className="flex items-center justify-between mb-2"><h3 className="text-sm font-semibold text-gray-600">En Ubicación</h3><MapPin className="text-green-600" size={24}/></div><p className="text-3xl font-bold text-green-600">{rep.totals.assigned}</p></div><div className="bg-white rounded-xl shadow-md p-6"><div className="flex items-center justify-between mb-2"><h3 className="text-sm font-semibold text-gray-600">Completados</h3><FileText className="text-gray-600" size={24}/></div><p className="text-3xl font-bold text-gray-600">{rep.totals.completed}</p></div><div className="bg-white rounded-xl shadow-md p-6"><div className="flex items-center justify-between mb-2"><h3 className="text-sm font-semibold text-gray-600">Sin Asignar</h3><Calendar className="text-yellow-600" size={24}/></div><p className="text-3xl font-bold text-yellow-600">{rep.totals.unassigned}</p></div></div><div className="bg-white rounded-xl shadow-md p-6"><div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold">Reportes por Ubicación</h2><div className="flex gap-2"><select value={rLoc} onChange={(e)=>setRLoc(e.target.value)} className="px-4 py-2 border rounded-lg"><option value="all">Todas</option>{locs.map(loc=><option key={loc.id} value={loc.id}>{loc.name}</option>)}</select><button onClick={()=>exportCSV(rLoc)} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold flex items-center"><Download className="mr-2" size={18}/>Exportar</button></div></div><div className="space-y-4">{rep.byLocation.filter(rpt=>rLoc==='all'||rpt.locationId===parseInt(rLoc)).map(rpt=><div key={rpt.locationId} className="border rounded-lg p-6"><div className="flex justify-between items-start mb-4"><div><h3 className="text-lg font-bold">{rpt.location}</h3><p className="text-sm text-gray-600">Total: {rpt.total}</p></div><div className="flex gap-4"><div className="text-center"><p className="text-2xl font-bold text-green-600">{rpt.current}</p><p className="text-xs text-gray-600">Actuales</p></div><div className="text-center"><p className="text-2xl font-bold text-gray-600">{rpt.exited}</p><p className="text-xs text-gray-600">Salieron</p></div></div></div>{rpt.vines.length>0&&<div className="bg-gray-50 rounded-lg p-4 max-h-60 overflow-y-auto"><table className="w-full text-sm"><thead><tr className="text-left text-gray-600"><th className="pb-2">VIN</th><th className="pb-2">Marca/Modelo</th><th className="pb-2">Entrada</th><th className="pb-2">Salida</th></tr></thead><tbody className="divide-y">{rpt.vines.map(vinItem=><tr key={vinItem.id}><td className="py-2 font-mono text-xs">{vinItem.vin}</td><td className="py-2">{vinItem.marca} {vinItem.modelo}</td><td className="py-2">{vinItem.entry_date?new Date(vinItem.entry_date).toLocaleDateString():'-'}</td><td className="py-2">{vinItem.exit_date?new Date(vinItem.exit_date).toLocaleDateString():'-'}</td></tr>)}</tbody></table></div>}</div>)}</div></div></div>}
+          {view==='admin-locations'&&<div className="bg-white rounded-xl shadow-md p-6"><div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold">Ubicaciones</h2><button onClick={()=>{setEditType('add-location');setEditData(null);setEditValue('');setEditModal(true);}} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold flex items-center"><Plus size={20} className="mr-2"/>Nueva</button></div><div className="grid gap-4">{locs.map(loc=>{const cnt=vines.filter(v=>v.location===loc.id&&!v.exit_date).length;return <div key={loc.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"><div className="flex items-center"><MapPin className="text-blue-600 mr-3" size={24}/><div><span className="font-semibold">{loc.name}</span><p className="text-sm text-gray-600">{cnt} VINES</p></div></div><div className="flex gap-2"><button onClick={()=>{setEditType('location');setEditData(loc);setEditValue(loc.name);setEditModal(true);}} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"><Edit2 size={18}/></button><button onClick={()=>{setEditType('delete-location');setEditData(loc);setEditModal(true);}} className="p-2 text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18}/></button></div></div>})}</div></div>}
+          {view==='admin-vigilantes'&&<div className="bg-white rounded-xl shadow-md p-6"><div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold">Vigilantes</h2><button onClick={()=>{setEditType('add-vigilante');setEditValue('');setEditModal(true);}} className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-semibold flex items-center"><Plus size={20} className="mr-2"/>Nuevo</button></div><div className="grid gap-4">{vigs.map(vig=><div key={vig.id} className="flex items-center justify-between p-4 border rounded-lg hover:bg-gray-50"><div><div className="font-semibold">{vig.name}</div><div className="text-sm text-gray-600">{vig.email}</div><div className="text-xs text-gray-500 font-mono mt-1">Contraseña: {vig.password}</div></div><div className="flex items-center gap-3"><span className={`px-3 py-1 rounded-full text-xs font-semibold ${vig.active?'bg-green-100 text-green-700':'bg-gray-200 text-gray-700'}`}>{vig.active?'Activo':'Inactivo'}</span><button onClick={()=>{setEditType('change-password');setEditData(vig);setEditValue('');setEditModal(true);}} className="px-3 py-2 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg text-xs font-semibold">Cambiar Pass</button><button onClick={async()=>{await supabase.from('vigilantes').update({active:!vig.active}).eq('id',vig.id);await loadData();}} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm font-semibold">{vig.active?'Desactivar':'Activar'}</button><button onClick={()=>{setEditType('delete-vigilante');setEditData(vig);setEditModal(true);}} className="p-2 text-red-600 hover:bg-red-50 rounded-lg"><Trash2 size={18}/></button></div></div>)}</div></div>}
         </div>
-        {editModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-bold">
-                  {editType === 'location' && 'Editar Ubicación'}
-                  {editType === 'add-location' && 'Nueva Ubicación'}
-                  {editType === 'delete-location' && 'Confirmar Eliminación'}
-                  {editType === 'add-vigilante' && 'Nuevo Vigilante'}
-                  {editType === 'change-password' && 'Cambiar Contraseña'}
-                </h3>
-                <button onClick={() => setEditModal(false)} className="p-2 hover:bg-gray-100 rounded-lg">
-                  <X size={20} />
-                </button>
-              </div>
-              
-              {editType === 'delete-location' ? (
-                <div>
-                  <p className="text-gray-700 mb-6">¿Estás seguro de que deseas eliminar la ubicación <span className="font-bold">"{editData?.name}"</span>?</p>
-                  <div className="flex gap-3">
-                    <button onClick={() => setEditModal(false)} className="flex-1 px-4 py-3 bg-gray-200 hover:bg-gray-300 rounded-lg font-semibold">
-                      Cancelar
-                    </button>
-                    <button onClick={confirmEdit} className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold">
-                      Eliminar
-                    </button>
-                  </div>
-                </div>
-              ) : editType === 'add-vigilante' ? (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">Nombre</label>
-                    <input
-                      type="text"
-                      placeholder="Nombre completo"
-                      value={editValue.split('|')[0] || ''}
-                      onChange={(e) => {
-                        const parts = editValue.split('|');
-                        parts[0] = e.target.value;
-                        setEditValue(parts.join('|'));
-                      }}
-                      className="w-full px-4 py-3 border rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">Email</label>
-                    <input
-                      type="email"
-                      placeholder="email@ejemplo.com"
-                      value={editValue.split('|')[1] || ''}
-                      onChange={(e) => {
-                        const parts = editValue.split('|');
-                        parts[1] = e.target.value;
-                        setEditValue(parts.join('|'));
-                      }}
-                      className="w-full px-4 py-3 border rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">Contraseña</label>
-                    <input
-                      type="text"
-                      placeholder="Contraseña"
-                      value={editValue.split('|')[2] || ''}
-                      onChange={(e) => {
-                        const parts = editValue.split('|');
-                        parts[2] = e.target.value;
-                        setEditValue(parts.join('|'));
-                      }}
-                      className="w-full px-4 py-3 border rounded-lg"
-                    />
-                  </div>
-                  <button onClick={confirmEdit} className="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-lg font-semibold">
-                    Crear Vigilante
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">
-                      {editType === 'location' || editType === 'add-location' ? 'Nombre de la ubicación' : 'Nueva contraseña'}
-                    </label>
-                    <input
-                      type="text"
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      placeholder={editType === 'change-password' ? 'Nueva contraseña' : 'Nombre'}
-                      className="w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-600 outline-none"
-                      onKeyPress={(e) => e.key === 'Enter' && confirmEdit()}
-                    />
-                  </div>
-                  <button onClick={confirmEdit} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-semibold">
-                    Confirmar
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-        {modal && sel && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-            <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-bold">{mType==='entry'?'Asignar':mType==='exit'?'Salida':'Corregir'}</h3>
-                <button onClick={close} className="p-2 hover:bg-gray-100 rounded-lg"><X size={20}/></button>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-4 mb-4">
-                <p className="font-mono font-semibold">{sel.vin}</p>
-                <p className="text-sm text-gray-600">{sel.marca} {sel.modelo}</p>
-              </div>
-              {mType==='exit'?(
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">Fecha Salida</label>
-                    <input type="date" value={mDate} onChange={(e)=>setMDate(e.target.value)} className="w-full px-4 py-3 border rounded-lg"/>
-                  </div>
-                  <button onClick={exit} className="w-full bg-orange-600 hover:bg-orange-700 text-white py-3 rounded-lg font-semibold">Confirmar</button>
-                </div>
-              ):(
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">Ubicación</label>
-                    <select value={mLoc} onChange={(e)=>setMLoc(e.target.value)} className="w-full px-4 py-3 border rounded-lg">
-                      <option value="">Seleccionar...</option>
-                      {locs.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">Fecha Entrada</label>
-                    <input type="date" value={mDate} onChange={(e)=>setMDate(e.target.value)} className="w-full px-4 py-3 border rounded-lg"/>
-                  </div>
-                  <button onClick={mType==='edit'?updateLoc:assignLoc} className="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-lg font-semibold">Confirmar</button>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+        {modal&&sel&&<div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"><div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md"><div className="flex justify-between items-center mb-4"><h3 className="text-xl font-bold">{mType==='entry'?'Asignar Ubicación':mType==='exit'?'Registrar Salida':'Editar Ubicación'}</h3><button onClick={close} className="p-2 hover:bg-gray-100 rounded-lg"><X size={20}/></button></div><div className="bg-gray-50 rounded-lg p-4 mb-4"><p className="font-mono font-semibold">{sel.vin}</p><p className="text-sm text-gray-600">{sel.marca} {sel.modelo}</p></div>{mType==='exit'?<div className="space-y-4"><div><label className="block text-sm font-semibold mb-2">Fecha Salida</label><input type="date" value={mDate} onChange={(e)=>setMDate(e.target.value)} className="w-full px-4 py-3 border rounded-lg"/></div><button onClick={exitVin} className="w-full bg-orange-600 hover:bg-orange-700 text-white py-3 rounded-lg font-semibold">Confirmar</button></div>:<div className="space-y-4"><div><label className="block text-sm font-semibold mb-2">Ubicación</label><select value={mLoc} onChange={(e)=>setMLoc(e.target.value)} className="w-full px-4 py-3 border rounded-lg"><option value="">Seleccionar...</option>{locs.map(loc=><option key={loc.id} value={loc.id}>{loc.name}</option>)}</select></div><div><label className="block text-sm font-semibold mb-2">Fecha Entrada</label><input type="date" value={mDate} onChange={(e)=>setMDate(e.target.value)} className="w-full px-4 py-3 border rounded-lg"/></div><button onClick={mType==='edit'?updateLoc:assignLoc} className="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-lg font-semibold">Confirmar</button></div>}</div></div>}
       </div>
     );
   }
@@ -637,66 +330,16 @@ export default function App() {
             <input type="text" placeholder="Buscar VIN, marca, modelo..." value={search} onChange={(e)=>setSearch(e.target.value)} className="px-4 py-3 border rounded-lg"/>
             <select value={fLoc} onChange={(e)=>setFLoc(e.target.value)} className="px-4 py-3 border rounded-lg">
               <option value="all">Todas las ubicaciones</option>
-              {locs.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}
+              {locs.map(loc=><option key={loc.id} value={loc.id}>{loc.name}</option>)}
             </select>
           </div>
         </div>
         <div className="grid gap-4">
-          {filtered.length===0?(
-            <div className="bg-white rounded-xl shadow-md p-12 text-center text-gray-500">
-              <Package size={64} className="mx-auto mb-4 opacity-20"/>
-              <p>No hay VINES.</p>
-            </div>
-          ):(
-            filtered.map(v=>(
-              <div key={v.id} className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow">
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <h3 className="text-lg font-bold font-mono">{v.vin}</h3>
-                    <p className="text-gray-600">{v.marca} {v.modelo} - {v.año}</p>
-                    <p className="text-sm text-gray-500">Color: {v.color}</p>
-                  </div>
-                  <span className={`px-4 py-2 rounded-full text-sm font-semibold ${v.exitDate?'bg-gray-200 text-gray-700':v.location?'bg-green-100 text-green-700':'bg-yellow-100 text-yellow-700'}`}>
-                    {v.exitDate?'Completado':v.location?'En ubicación':'Sin asignar'}
-                  </span>
-                </div>
-                {v.location&&(
-                  <div className="bg-gray-50 rounded-lg p-4 mb-4 space-y-2">
-                    <div className="flex items-center text-sm">
-                      <MapPin size={16} className="mr-2 text-purple-600"/>
-                      <span className="font-semibold">{locs.find(l=>l.id===v.location)?.name}</span>
-                    </div>
-                    {v.entryDate&&(
-                      <div className="flex items-center text-sm text-gray-600">
-                        <Calendar size={16} className="mr-2"/>
-                        Entrada: {new Date(v.entryDate).toLocaleDateString()}
-                      </div>
-                    )}
-                    {v.exitDate&&(
-                      <div className="flex items-center text-sm text-gray-600">
-                        <Calendar size={16} className="mr-2"/>
-                        Salida: {new Date(v.exitDate).toLocaleDateString()}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <div className="flex gap-2">
-                  {!v.location&&(
-                    <button onClick={(e)=>{e.stopPropagation();setSel(v);setMType('entry');setModal(true);setMLoc('');setMDate(new Date().toISOString().split('T')[0]);}} className="flex-1 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-semibold">
-                      Asignar Ubicación
-                    </button>
-                  )}
-                  {v.location&&!v.exitDate&&(
-                    <button onClick={(e)=>{e.stopPropagation();setSel(v);setMType('exit');setModal(true);setMDate(new Date().toISOString().split('T')[0]);}} className="flex-1 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-semibold">
-                      Registrar Salida
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))
-          )}
+          {filtered.length===0?<div className="bg-white rounded-xl shadow-md p-12 text-center text-gray-500"><Package size={64} className="mx-auto mb-4 opacity-20"/><p>No hay VINES</p></div>:filtered.map(vin=><div key={vin.id} className="bg-white rounded-xl shadow-md p-6 hover:shadow-lg transition-shadow"><div className="flex justify-between items-start mb-4"><div><h3 className="text-lg font-bold font-mono">{vin.vin}</h3><p className="text-gray-600">{vin.marca} {vin.modelo} - {vin.año}</p><p className="text-sm text-gray-500">Color: {vin.color}</p></div><span className={`px-4 py-2 rounded-full text-sm font-semibold ${vin.delivered?'bg-blue-100 text-blue-700':vin.exit_date?'bg-gray-200 text-gray-700':vin.location?'bg-green-100 text-green-700':'bg-yellow-100 text-yellow-700'}`}>{vin.delivered?'Entregado':vin.exit_date?'Completado':vin.location?'En ubicación':'Sin asignar'}</span></div>{vin.location&&<div className="bg-gray-50 rounded-lg p-4 mb-4 space-y-2"><div className="flex items-center text-sm"><MapPin size={16} className="mr-2 text-purple-600"/><span className="font-semibold">{locs.find(loc=>loc.id===vin.location)?.name}</span></div>{vin.entry_date&&<div className="flex items-center text-sm text-gray-600"><Calendar size={16} className="mr-2"/>Entrada: {new Date(vin.entry_date).toLocaleDateString()}</div>}{vin.exit_date&&<div className="flex items-center text-sm text-gray-600"><Calendar size={16} className="mr-2"/>Salida: {new Date(vin.exit_date).toLocaleDateString()}</div>}</div>}<div className="flex gap-2">{!vin.location&&!vin.delivered&&<button type="button" onClick={()=>{setSel(vin);setMType('entry');setModal(true);setMLoc('');setMDate(new Date().toISOString().split('T')[0]);}} className="flex-1 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg font-semibold">Asignar Ubicación</button>}{vin.location&&!vin.exit_date&&!vin.delivered&&<button type="button" onClick={()=>{setSel(vin);setMType('exit');setModal(true);setMDate(new Date().toISOString().split('T')[0]);}} className="flex-1 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg font-semibold">Registrar Salida</button>}</div></div>)}
         </div>
       </div>
+      {modal&&sel&&<div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"><div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md"><div className="flex justify-between items-center mb-4"><h3 className="text-xl font-bold">{mType==='entry'?'Asignar Ubicación':mType==='exit'?'Registrar Salida':'Corregir Ubicación'}</h3><button onClick={close} className="p-2 hover:bg-gray-100 rounded-lg"><X size={20}/></button></div><div className="bg-gray-50 rounded-lg p-4 mb-4"><p className="font-mono font-semibold">{sel.vin}</p><p className="text-sm text-gray-600">{sel.marca} {sel.modelo}</p></div>{mType==='exit'?<div className="space-y-4"><div><label className="block text-sm font-semibold mb-2">Fecha Salida</label><input type="date" value={mDate} onChange={(e)=>setMDate(e.target.value)} className="w-full px-4 py-3 border rounded-lg"/></div><button onClick={exitVin} className="w-full bg-orange-600 hover:bg-orange-700 text-white py-3 rounded-lg font-semibold">Confirmar</button></div>:<div className="space-y-4"><div><label className="block text-sm font-semibold mb-2">Ubicación</label><select value={mLoc} onChange={(e)=>setMLoc(e.target.value)} className="w-full px-4 py-3 border rounded-lg"><option value="">Seleccionar...</option>{locs.map(loc=><option key={loc.id} value={loc.id}>{loc.name}</option>)}</select></div><div><label className="block text-sm font-semibold mb-2">Fecha Entrada</label><input type="date" value={mDate} onChange={(e)=>setMDate(e.target.value)} className="w-full px-4 py-3 border rounded-lg"/></div><button onClick={mType==='edit'?updateLoc:assignLoc} className="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-lg font-semibold">Confirmar</button></div>}</div></div>}
+      {alertModal&&<div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50"><div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm"><div className="text-center mb-4"><div className="bg-blue-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3"><Package className="w-8 h-8 text-blue-600"/></div><p className="text-gray-800">{alertMessage}</p></div><button onClick={()=>setAlertModal(false)} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-semibold">Aceptar</button></div></div>}
     </div>
   );
 }
